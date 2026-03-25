@@ -50,7 +50,7 @@ pipeline {
                     sh """
                         echo "WORKSPACE=${env.WORKSPACE}"
                         ls -la \"${env.WORKSPACE}\"
-                        docker run --rm -v \"${env.WORKSPACE}:/workspace\" -w /workspace python:3.13-slim bash -lc 'pip install --no-cache-dir -r requirements.txt && pytest -v --tb=short --junitxml=test-results.xml'
+                        docker run --rm -v \"${env.WORKSPACE}:/workspace\" -w /workspace python:3.13-slim bash -lc 'cd /workspace && pip install --no-cache-dir -r requirements.txt && pytest -v --tb=short --junitxml=test-results.xml'
                     """
                 }
             }
