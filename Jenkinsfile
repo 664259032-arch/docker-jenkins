@@ -113,22 +113,22 @@ pipeline {
 
         // Deploy to DEV (Local Docker) — สำหรับ branch develop
 
-        // Approval ก่อน Deploy ไป PROD
-        stage('Approval for Production') {
+    //     // Approval ก่อน Deploy ไป PROD
+    //     stage('Approval for Production') {
            
-            steps {
-                timeout(time: 1, unit: 'HOURS') {
-                    input message: "Deploy image tag '${env.IMAGE_TAG}' to PRODUCTION (Local Docker on port ${PROD_HOST_PORT})?"
-                }
-            }
-        }
+    //         steps {
+    //             timeout(time: 1, unit: 'HOURS') {
+    //                 input message: "Deploy image tag '${env.IMAGE_TAG}' to PRODUCTION (Local Docker on port ${PROD_HOST_PORT})?"
+    //             }
+    //         }
+    //     }
 
-        // Deploy to PROD (Local Docker) — สำหรับ branch main
-       stage('Deploy to PRODUCTION (Local Docker)') {
-    when {
-        expression { params.ACTION == 'Build & Deploy' }
-        branch 'main'
-    }
+    //     // Deploy to PROD (Local Docker) — สำหรับ branch main
+    //    stage('Deploy to PRODUCTION (Local Docker)') {
+    // when {
+    //     expression { params.ACTION == 'Build & Deploy' }
+    //     branch 'main'
+    // }
     steps {
         script {
             // ใช้ try-catch เพื่อป้องกัน Pipeline พังกรณีหาคำสั่ง docker ไม่เจอ
