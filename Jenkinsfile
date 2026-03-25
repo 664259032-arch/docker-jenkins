@@ -2,7 +2,6 @@
 // HELPER FUNCTION: ส่ง Notification ไปยัง n8n (ตามแนวทางของ Express Pipeline)
 // =================================================================
 
-
 pipeline {
     // ใช้ agent any เพราะ build จะทำงานบน Jenkins controller/agent (Linux)
     agent any
@@ -47,11 +46,12 @@ pipeline {
             steps {
                 echo "Running tests inside a consistent Docker environment..."
                 script {
-                    sh """
-                        echo "WORKSPACE=${env.WORKSPACE}"
-                        ls -la \"${env.WORKSPACE}\"
-                        docker run --rm -v \"${env.WORKSPACE}:/workspace\" -w /workspace python:3.13-slim bash -lc 'cd /workspace && pip install --no-cache-dir -r requirements.txt && pytest -v --tb=short --junitxml=test-results.xml'
-                    """
+                    docker.image('python:3.13-slim').inside {
+                        sh '''
+                            pip install --no-cache-dir -r requirements.txt
+                            pytest -v --tb=short --junitxml=test-results.xml
+                        '''
+                    }
                 }
             }
             post {
@@ -61,34 +61,43 @@ pipeline {
             }
         }
 
-        // Stage 3: Build & Push Docker Image (Push latest เฉพาะ main)
-        stage('Build & Push Docker Image') {
-            when { expression { params.ACTION == 'Build & Deploy' } }
-            steps {
-                script {
-                    def imageTag = (env.BRANCH_NAME == 'main') ? sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim() : "dev-${env.BUILD_NUMBER}"
-                    env.IMAGE_TAG = imageTag
+stage('Build & Push Docker Image') {
+    steps {
+        script {
+            // 1. คำนวณค่า tag
+            def localTag = (env.BRANCH_NAME == 'main') ?
+                sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                : "dev-${env.BUILD_NUMBER}"
 
-                    withCredentials([usernamePassword(credentialsId: DOCKER_HUB_CREDENTIALS_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh """
-                            echo \"${DOCKER_PASS}\" | docker login -u \"${DOCKER_USER}\" --password-stdin
-                            echo "Building image: ${DOCKER_REPO}:${env.IMAGE_TAG}"
-                            docker build -t ${DOCKER_REPO}:${env.IMAGE_TAG} .
-                            docker push ${DOCKER_REPO}:${env.IMAGE_TAG}
-                            if [ \"${BRANCH_NAME}\" = \"main\" ]; then
-                              docker tag ${DOCKER_REPO}:${env.IMAGE_TAG} ${DOCKER_REPO}:latest
-                              docker push ${DOCKER_REPO}:latest
-                            fi
-                            docker logout
-                        """
-                    }
+            // 2. *** สำคัญมาก ***: นำค่าไปใส่ใน env เพื่อให้ stage อื่นเรียกใช้ได้
+            env.IMAGE_TAG = localTag 
+
+            echo "IMAGE TAG SET TO = ${env.IMAGE_TAG}"
+
+            // 3. build และ push โดยใช้ env.IMAGE_TAG
+            def image = docker.build("${DOCKER_REPO}:${env.IMAGE_TAG}")
+
+            docker.withRegistry('', DOCKER_HUB_CREDENTIALS_ID) {
+                image.push()
+                if (env.BRANCH_NAME == 'main') {
+                    image.push('latest')
+                }
+            }
+        }
+    }
+}
+
+        // Approval ก่อน Deploy ไป PROD
+        stage('Approval for Production') {
+            steps {
+                timeout(time: 1, unit: 'HOURS') {
+                    input message: "Deploy image tag '${env.IMAGE_TAG}' to PRODUCTION (Local Docker on port ${PROD_HOST_PORT})?"
                 }
             }
         }
 
-        // Deploy to PRODUCTION (Local Docker)
+        // Deploy to PROD (Local Docker) — สำหรับ branch main
         stage('Deploy to PRODUCTION (Local Docker)') {
-            when { expression { params.ACTION == 'Build & Deploy' } }
             steps {
                 script {
                     def deployCmd = """
@@ -106,30 +115,27 @@ pipeline {
 
         // Rollback เมื่อเลือก ACTION = Rollback
         stage('Execute Rollback') {
-            when { expression { params.ACTION == 'Rollback' } }
+            when { expression { params.ACTION == 'Rollback' } } 
             steps {
                 script {
                     if (params.ROLLBACK_TAG.trim().isEmpty()) {
                         error "เมื่อเลือก Rollback กรุณาระบุ 'ROLLBACK_TAG'"
                     }
 
-                    env.TARGET_APP_NAME  = (params.ROLLBACK_TARGET == 'dev') ? env.DEV_APP_NAME  : env.PROD_APP_NAME
-                    env.TARGET_HOST_PORT = (params.ROLLBACK_TARGET == 'dev') ? env.DEV_HOST_PORT : env.PROD_HOST_PORT
+                    // ใช้ PROD_APP_NAME และ PROD_HOST_PORT ตามที่คุณตั้งใน env
+                    def targetApp = env.PROD_APP_NAME
+                    def targetPort = env.PROD_HOST_PORT
                     def imageToDeploy = "${DOCKER_REPO}:${params.ROLLBACK_TAG.trim()}"
 
-                    echo "ROLLING BACK ${params.ROLLBACK_TARGET.toUpperCase()} to image: ${imageToDeploy}"
+                    echo "ROLLING BACK to image: ${imageToDeploy}"
 
                     sh """
                         docker pull ${imageToDeploy}
-                        docker stop ${env.TARGET_APP_NAME} || true
-                        docker rm ${env.TARGET_APP_NAME} || true
-                        docker run -d --name ${env.TARGET_APP_NAME} -p ${env.TARGET_HOST_PORT}:5000 ${imageToDeploy}
+                        docker stop ${targetApp} || true
+                        docker rm ${targetApp} || true
+                        docker run -d --name ${targetApp} -p ${targetPort}:5000 ${imageToDeploy}
                     """
-                }
-            }
-            post {
-                success {
-                    sendNotificationToN8n('success', "Rollback ${params.ROLLBACK_TARGET.toUpperCase()}", params.ROLLBACK_TAG, env.TARGET_APP_NAME, env.TARGET_HOST_PORT)
+                    sendNotificationToN8n('success', "Rollback Executed", params.ROLLBACK_TAG, targetApp, targetPort)
                 }
             }
         }
@@ -154,9 +160,6 @@ pipeline {
                 echo "Cleaning up workspace..."
                 cleanWs()
             }
-        }
-        failure {
-            echo "Pipeline failed!"
         }
     }
 }
