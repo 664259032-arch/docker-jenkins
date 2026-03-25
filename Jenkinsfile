@@ -48,8 +48,9 @@ pipeline {
                 echo "Running tests inside a consistent Docker environment..."
                 script {
                     sh """
-                        docker run --rm -v \"${env.WORKSPACE}:/workspace\" -w /workspace python:3.13-slim bash -c \
-                        'pip install --no-cache-dir -r requirements.txt && pytest -v --tb=short --junitxml=test-results.xml'
+                        echo "WORKSPACE=${env.WORKSPACE}"
+                        ls -la \"${env.WORKSPACE}\"
+                        docker run --rm -v \"${env.WORKSPACE}:/workspace\" -w /workspace python:3.13-slim bash -lc 'pip install --no-cache-dir -r requirements.txt && pytest -v --tb=short --junitxml=test-results.xml'
                     """
                 }
             }
