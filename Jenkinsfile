@@ -47,12 +47,10 @@ pipeline {
             steps {
                 echo "Running tests inside a consistent Docker environment..."
                 script {
-                    docker.image('python:3.13-slim').inside {
-                        sh '''
-                            pip install --no-cache-dir -r requirements.txt
-                            pytest -v --tb=short --junitxml=test-results.xml
-                        '''
-                    }
+                    sh """
+                        docker run --rm -v \"${env.WORKSPACE}:/workspace\" -w /workspace python:3.13-slim bash -c \
+                        'pip install --no-cache-dir -r requirements.txt && pytest -v --tb=short --junitxml=test-results.xml'
+                    """
                 }
             }
             post {
@@ -70,15 +68,18 @@ pipeline {
                     def imageTag = (env.BRANCH_NAME == 'main') ? sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim() : "dev-${env.BUILD_NUMBER}"
                     env.IMAGE_TAG = imageTag
 
-                    docker.withRegistry('https://index.docker.io/v1/', DOCKER_HUB_CREDENTIALS_ID) {
-                        echo "Building image: ${DOCKER_REPO}:${env.IMAGE_TAG}"
-                        def customImage = docker.build("${DOCKER_REPO}:${env.IMAGE_TAG}")
-
-                        echo "Pushing images to Docker Hub..."
-                        customImage.push()
-                        if (env.BRANCH_NAME == 'main') {
-                            customImage.push('latest')
-                        }
+                    withCredentials([usernamePassword(credentialsId: DOCKER_HUB_CREDENTIALS_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        sh """
+                            echo \"${DOCKER_PASS}\" | docker login -u \"${DOCKER_USER}\" --password-stdin
+                            echo "Building image: ${DOCKER_REPO}:${env.IMAGE_TAG}"
+                            docker build -t ${DOCKER_REPO}:${env.IMAGE_TAG} .
+                            docker push ${DOCKER_REPO}:${env.IMAGE_TAG}
+                            if [ \"${BRANCH_NAME}\" = \"main\" ]; then
+                              docker tag ${DOCKER_REPO}:${env.IMAGE_TAG} ${DOCKER_REPO}:latest
+                              docker push ${DOCKER_REPO}:latest
+                            fi
+                            docker logout
+                        """
                     }
                 }
             }
